@@ -30,6 +30,8 @@ const int PIN_LED_RED      = 12; // Red LED (D12)[cite: 2]
 const int PIN_LED_YELLOW   = A4; // Yellow LED (A4)[cite: 2]
 const int PIN_LED_GREEN    = 13; // Green LED (D13)[cite: 2]
 
+
+
 // Threshold for white border detection (in microseconds)[cite: 2]
 const unsigned int QTR_WHITE_THRESHOLD = 1200; 
 
