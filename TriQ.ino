@@ -125,3 +125,230 @@ void setMotors(int leftSpeed, int rightSpeed) {
 }
 
 
+// ===================== SENSOR ACQUISITION =====================
+
+// Read all 9 sensors and start button to update global state variables
+void readSensors() {
+
+  // --- Start Button Reading ---
+  // Returns true when pressed (LOW due to INPUT_PULLUP)
+  buttonPressed = (digitalRead(PIN_START_BUTTON) == LOW);
+
+  // --- Obstacle Sensors Reading (5x Active-LOW Sensors) ---
+  // JS200XF Long-Range Front Sensors
+  obstacleFrontLeft   = (digitalRead(PIN_JS200_LEFT) == LOW)   ? DETECTED : CLEAR;
+  obstacleFrontCenter = (digitalRead(PIN_JS200_CENTER) == LOW) ? DETECTED : CLEAR;
+  obstacleFrontRight  = (digitalRead(PIN_JS200_RIGHT) == LOW)  ? DETECTED : CLEAR;
+
+  // E18-D80NK Rear Flank Sensors
+  obstacleRearLeft    = (digitalRead(PIN_E18_REAR_LEFT) == LOW)  ? DETECTED : CLEAR;
+  obstacleRearRight   = (digitalRead(PIN_E18_REAR_RIGHT) == LOW) ? DETECTED : CLEAR;
+
+  // --- Line Sensors Reading (4x QTR-1RC Timing Discharge) ---
+  // Front Blade Line Sensors
+  lineFrontLeft   = isWhiteLine(PIN_LINE_FRONT_LEFT)   ? WHITE : BLACK;
+  lineFrontCenter = isWhiteLine(PIN_LINE_FRONT_CENTER) ? WHITE : BLACK;
+  lineFrontRight  = isWhiteLine(PIN_LINE_FRONT_RIGHT)  ? WHITE : BLACK;
+
+  // Rear Line Sensor
+  lineRear        = isWhiteLine(PIN_LINE_REAR)         ? WHITE : BLACK;
+}
+
+
+// ===================== SERIAL DEBUG MONITOR =====================
+
+// Print current robot status to the Arduino UNO Q Monitor[cite: 1]
+void printDebug() {
+
+  // --- Start Button ---
+  Monitor.print("BTN: ");
+  Monitor.print(buttonPressed ? "PRESSED" : "OPEN");
+
+  // --- Front Obstacle Sensors (JS200XF) ---
+  Monitor.print(" | FRONT OB [L C R]: ");
+  Monitor.print(obstacleFrontLeft == DETECTED ? "DET" : "CLR");
+  Monitor.print(" ");
+  Monitor.print(obstacleFrontCenter == DETECTED ? "DET" : "CLR");
+  Monitor.print(" ");
+  Monitor.print(obstacleFrontRight == DETECTED ? "DET" : "CLR");
+
+  // --- Rear Flank Sensors (E18-D80NK) ---
+  Monitor.print(" | REAR OB [L R]: ");
+  Monitor.print(obstacleRearLeft == DETECTED ? "DET" : "CLR");
+  Monitor.print(" ");
+  Monitor.print(obstacleRearRight == DETECTED ? "DET" : "CLR");
+
+  // --- Blade & Rear Line Sensors (QTR-1RC) ---
+  Monitor.print(" | LINE [FL FC FR RR]: ");
+  Monitor.print(lineFrontLeft == BLACK ? "BLK" : "WHT");
+  Monitor.print(" ");
+  Monitor.print(lineFrontCenter == BLACK ? "BLK" : "WHT");
+  Monitor.print(" ");
+  Monitor.print(lineFrontRight == BLACK ? "BLK" : "WHT");
+  Monitor.print(" ");
+  Monitor.print(lineRear == BLACK ? "BLK" : "WHT");
+
+  // --- Last Tracked Direction ---
+  Monitor.print(" | DIR: ");
+  if (lastDirection == 0)      Monitor.println("LEFT");
+  else if (lastDirection == 1) Monitor.println("CENTER");
+  else                         Monitor.println("RIGHT");
+}
+
+
+// ===================== STARTUP & COMPETITION SEQUENCE =====================
+
+// Wait for the operator start command and perform 5-second countdown with pre-scan
+void waitForStart() {
+
+  robotStarted = false;
+
+  // --- 1. STANDBY INDICATION (Red LED ON) ---
+  digitalWrite(PIN_LED_RED, HIGH);
+  digitalWrite(PIN_LED_YELLOW, LOW);
+  digitalWrite(PIN_LED_GREEN, LOW);
+
+  stopMotors(); // Ensure motors are stopped at boot
+
+  Monitor.println("Waiting for start button press...");
+
+  // --- 2. WAIT FOR BUTTON PRESS ---
+  // Loops continuously while button is NOT pressed (HIGH)
+  while (buttonPressed == false) {
+    readSensors();
+    printDebug();
+    delay(50);
+  }
+
+  Monitor.println("Button Pressed! Arming robot...");
+
+  // --- 3. MANDATORY 5-SECOND COUNTDOWN WITH SILENT PRE-SCAN ---
+  // Seconds 1 & 2: Red Light
+  digitalWrite(PIN_LED_RED, HIGH);
+  digitalWrite(PIN_LED_YELLOW, LOW);
+  digitalWrite(PIN_LED_GREEN, LOW);
+
+  // Run 50 cycles of 100ms = 5000ms total delay
+  for (int i = 0; i < 50; i++) {
+    stopMotors(); // STRICT RULE: Motors locked at 0 PWM (Zero movement)
+    readSensors(); // Read all 5 obstacle sensors silently
+
+    // Silently log opponent starting position into lastDirection
+    if (obstacleFrontCenter == DETECTED) {
+      lastDirection = 1; // Center
+    } else if (obstacleFrontLeft == DETECTED) {
+      lastDirection = 0; // Left
+    } else if (obstacleFrontRight == DETECTED) {
+      lastDirection = 2; // Right
+    }
+
+    // Switch traffic light to Yellow at the 2-second mark (cycle 20)
+    if (i == 20) {
+      digitalWrite(PIN_LED_RED, LOW);
+      digitalWrite(PIN_LED_YELLOW, HIGH);
+      Monitor.println("Starting in 3 seconds...");
+    }
+
+    delay(100);
+  }
+
+  // --- 4. MATCH STARTS (Green LED ON) ---
+  digitalWrite(PIN_LED_RED, LOW);
+  digitalWrite(PIN_LED_YELLOW, LOW);
+  digitalWrite(PIN_LED_GREEN, HIGH);
+
+  Monitor.println("MATCH STARTED! Executing WoodPecker attack!");
+  robotStarted = true;
+}
+
+
+// ===================== MAIN ROBOT LOGIC =====================
+
+// Main autonomous "WoodPecker" robot control loop
+void loop() {
+
+  // Read all 9 sensors and update state
+  readSensors();
+  printDebug();
+
+  // ---------------------------------------------------------------
+  // 1. HIGHEST PRIORITY: WHITE LINE BOUNDARY ESCAPE
+  // ---------------------------------------------------------------
+  if (lineFrontLeft == WHITE || lineFrontCenter == WHITE) {
+    Monitor.println("ACTION: LINE ESCAPE - FRONT LEFT");
+    backward(255);
+    delay(250);
+    right(255); // Spin away from left edge
+    delay(200);
+    return;
+  } 
+  else if (lineFrontRight == WHITE) {
+    Monitor.println("ACTION: LINE ESCAPE - FRONT RIGHT");
+    backward(255);
+    delay(250);
+    left(255); // Spin away from right edge
+    delay(200);
+    return;
+  } 
+  else if (lineRear == WHITE) {
+    Monitor.println("ACTION: LINE ESCAPE - REAR");
+    forward(255); // Rapid forward burst away from rear edge
+    delay(250);
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // 2. SECOND PRIORITY: REAR FLANK DEFENSE
+  // ---------------------------------------------------------------
+  if (obstacleRearLeft == DETECTED || obstacleRearRight == DETECTED) {
+    Monitor.println("ACTION: FLANK COUNTER-STRIKE");
+    right(255); // Snap 180-degree spin to bring front blade to opponent
+    delay(150);
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // 3. THIRD PRIORITY: "WOODPECKER" ATTACK MODE
+  // ---------------------------------------------------------------
+  if (obstacleFrontCenter == DETECTED) {
+    Monitor.println("ACTION: FULL POWER ATTACK!");
+    lastDirection = 1; // Center
+    forward(255); // 100% PWM aggressive charge
+  }
+  else if (obstacleFrontLeft == DETECTED) {
+    Monitor.println("ACTION: CURVED ATTACK LEFT");
+    lastDirection = 0; // Left
+    setMotors(160, 255); // Drive forward while curving left
+  }
+  else if (obstacleFrontRight == DETECTED) {
+    Monitor.println("ACTION: CURVED ATTACK RIGHT");
+    lastDirection = 2; // Right
+    setMotors(255, 160); // Drive forward while curving right
+  }
+
+  // ---------------------------------------------------------------
+  // 4. FOURTH PRIORITY: "WOODPECKER" VIBRATION SEARCH
+  // ---------------------------------------------------------------
+  else {
+    Monitor.println("ACTION: WOODPECKER VIBRATION SEARCH");
+    
+    // Rapid micro-twitch to sweep long-range JS200XF sensors
+    if (lastDirection == 0) {
+      setMotors(-120, 220); // Quick left twitch
+      delay(30);
+    } else if (lastDirection == 2) {
+      setMotors(220, -120); // Quick right twitch
+      delay(30);
+    } else {
+      setMotors(200, -100);
+      delay(25);
+      setMotors(-100, 200);
+      delay(25);
+    }
+
+    forward(180); // Creep forward into ring center
+    delay(20);
+  }
+}
+
+
